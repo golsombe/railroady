@@ -42,12 +42,21 @@ class ModelsDiagram < AppDiagram
       end #begin / rescue
     end #get_files.each
   end #def generate
+      begin
+        process_class extract_class_name(f).constantize
+      rescue Exception
+        STDERR.print "Warning: exception #{$!} raised while trying to load model class #{f}\n"
+      end
+
+    end
+  end 
 
   def get_files(prefix ='')
     files = !@options.specify.empty? ? Dir.glob(@options.specify) : Dir.glob(prefix << "app/models/**/*.rb")
     files += Dir.glob("vendor/plugins/**/app/models/*.rb") if @options.plugins_models
     files -= Dir.glob(@options.exclude)
     files
+
   end #get_files
 
   # Process a model class
@@ -73,6 +82,22 @@ class ModelsDiagram < AppDiagram
     if current_class.respond_to?'reflect_on_all_associations'
 	STDERR.print "\tActiveRecord #{current_class}\n" if @options.verbose
       #~ node_attribs = []
+
+  end
+
+  # Process a model class
+  def process_class(current_class)
+
+    STDERR.print "\tProcessing #{current_class}\n" if @options.verbose
+
+    generated = false
+        
+    # Is current_clas derived from ActiveRecord::Base?
+    if current_class.respond_to?'reflect_on_all_associations'
+
+
+      node_attribs = []
+
       if @options.brief || current_class.abstract_class?
         node_type = 'model-brief'
       else 
@@ -85,10 +110,19 @@ class ModelsDiagram < AppDiagram
         if @options.hide_magic 
           # From patch #13351
           # http://wiki.rubyonrails.org/rails/pages/MagicFieldNames
+
+
+          magic_fields = [
+          "created_at", "created_on", "updated_at", "updated_on",
+          "lock_version", "type", "id", "position", "parent_id", "lft", 
+          "rgt", "quote", "template"
+          ]
+
           magic_fields << current_class.table_name + "_count" if current_class.respond_to? 'table_name' 
           content_columns = current_class.content_columns.select {|c| ! magic_fields.include? c.name}
         else
           content_columns = current_class.content_columns
+
         end #@options.hide_magic
 
 	content_columns.each do |a|
@@ -97,12 +131,23 @@ class ModelsDiagram < AppDiagram
           node_attribs << content_column
         end #content_columns.each
      end
+
+        end
+        
+        content_columns.each do |a|
+          content_column = a.name
+          content_column += ' :' + a.type.to_s unless @options.hide_types
+          node_attribs << content_column
+        end
+      end
+
       @graph.add_node [node_type, current_class.name, node_attribs]
       generated = true
       # Process class associations
       associations = current_class.reflect_on_all_associations
       if @options.inheritance && ! @options.transitive
         superclass_associations = current_class.superclass.reflect_on_all_associations
+
         associations = associations.select{|a| ! superclass_associations.include? a} 
         # This doesn't works!
         # associations -= current_class.superclass.reflect_on_all_associations
@@ -113,10 +158,23 @@ class ModelsDiagram < AppDiagram
     elsif @options.all && (current_class.is_a? Class)
       # Not ActiveRecord::Base model
       STDERR.print "\tNot AR: I made it past the elseif" if @options.verbose
+
+        
+        associations = associations.select{|a| ! superclass_associations.include? a} 
+        # This doesn't works!
+        # associations -= current_class.superclass.reflect_on_all_associations
+      end
+      associations.each do |a|
+        process_association current_class.name, a
+      end
+    elsif @options.all && (current_class.is_a? Class)
+      # Not ActiveRecord::Base model
+
       node_type = @options.brief ? 'class-brief' : 'class'
       @graph.add_node [node_type, current_class.name]
       generated = true
     elsif @options.modules && (current_class.is_a? Module)
+
 	STDERR.print "\tJust a base class, need to add fields" if @options.verbose   
         @graph.add_node ['module', current_class.name]
     end #current_class.respond_to?'reflect_on_all_associations'
@@ -164,6 +222,10 @@ class ModelsDiagram < AppDiagram
 
 end #model_name
 	
+
+
+        @graph.add_node ['module', current_class.name]
+    end
 
 
     # Only consider meaningful inheritance relations for generated classes
